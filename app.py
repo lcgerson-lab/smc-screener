@@ -14,9 +14,9 @@ st.sidebar.header("Configuración del Escáner")
 TIMEFRAME = st.sidebar.selectbox("Temporalidad", ["1h", "4h", "1d"], index=1)
 
 DEFAULT_SYMBOLS = [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
-    'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT',
-    'LINK/USDT', 'DOT/USDT'
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT',
+    'XRP/USDT', 'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT',
+    'DOT/USDT', 'LTC/USDT'
 ]
 
 symbols_input = st.sidebar.text_area(
@@ -29,15 +29,12 @@ if st.button("🔄 Actualizar Escáner"):
     st.cache_data.clear()
     st.rerun()
 
-# Inicializamos el cliente de Bybit
-exchange = ccxt.bybit({
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
+# Kraken no aplica geobloqueos a las IPs de Streamlit Cloud
+exchange = ccxt.kraken({'enableRateLimit': True})
 
+@st.cache_data(ttl=60)
 def fetch_data(symbol, timeframe):
     try:
-        # Petición pública de datos OHLCV
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=150)
         if not ohlcv:
             return None
@@ -45,7 +42,6 @@ def fetch_data(symbol, timeframe):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
     except Exception as e:
-        st.caption(f"⚠️ Error al conectar con {symbol}: {e}")
         return None
 
 def analyze_symbol(symbol, timeframe):
@@ -55,7 +51,7 @@ def analyze_symbol(symbol, timeframe):
     
     current_price = df['close'].iloc[-1]
     
-    # 1. Cálculo de Fair Value Gaps (FVG)
+    # 1. Fair Value Gaps (FVG)
     fvg_status = "Sin zona cercana"
     try:
         fvg_df = smc.fvg(df)
@@ -69,7 +65,7 @@ def analyze_symbol(symbol, timeframe):
     except Exception:
         pass
 
-    # 2. Cálculo de Liquidez BSL/SSL
+    # 2. Liquidez BSL/SSL
     liq_status = "En rango"
     try:
         liq_df = smc.liquidity(df)
@@ -91,7 +87,7 @@ def analyze_symbol(symbol, timeframe):
     }
 
 # --- EJECUCIÓN Y TABLA EN PANTALLA ---
-with st.spinner("Conectando con Bybit y analizando SMC..."):
+with st.spinner("Conectando con Kraken y procesando SMC..."):
     results = []
     for sym in SYMBOL_LIST:
         res = analyze_symbol(sym, TIMEFRAME)
@@ -102,4 +98,4 @@ if results:
     results_df = pd.DataFrame(results)
     st.dataframe(results_df, use_container_width=True)
 else:
-    st.error("No se pudieron procesar los datos de la watchlist.")
+    st.error("No se pudieron cargar los datos del exchange.")
