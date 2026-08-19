@@ -1,0 +1,93 @@
+import streamlit as st
+import pandas as pd
+import ccxt
+from smartmoneyconcepts import smc
+
+# Configuración visual de la página en Streamlit
+st.set_page_config(page_title="SMC Radar & Screener", layout="wide")
+
+st.title("⚡ SMC Radar & Screener - 4H")
+st.caption("Escaner de Liquidez (BSL/SSL) y Fair Value Gaps (FVG) en tiempo real")
+
+# Configuración del panel lateral (Sidebar)
+st.sidebar.header("Configuración del Escáner")
+TIMEFRAME = st.sidebar.selectbox("Temporalidad", ["1h", "4h", "1d"], index=1)
+
+# Lista por defecto de activos
+DEFAULT_SYMBOLS = [
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
+    'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT',
+    'LINK/USDT', 'DOT/USDT'
+]
+
+symbols_input = st.sidebar.text_area(
+    "Watchlist (separados por coma)", 
+    value=", ".join(DEFAULT_SYMBOLS)
+)
+SYMBOL_LIST = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+
+# Botón de refresco manual
+if st.button("🔄 Actualizar Escáner"):
+    st.rerun()
+
+exchange = ccxt.binance({'enableRateLimit': True})
+
+@st.cache_data(ttl=60) # Guarda en caché 1 minuto para no saturar la API
+def fetch_data(symbol, timeframe):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=150)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
+    except Exception as e:
+        return None
+
+def analyze_symbol(symbol, timeframe):
+    df = fetch_data(symbol, timeframe)
+    if df is None or df.empty:
+        return None
+    
+    current_price = df['close'].iloc[-1]
+    
+    # 1. FVG
+    fvg_df = smc.fvg(df)
+    fvg_status = "Sin zona cercana"
+    if not fvg_df.empty and 'top' in fvg_df.columns:
+        active_fvgs = fvg_df[fvg_df['mitigated_index'].isna()] if 'mitigated_index' in fvg_df.columns else fvg_df
+        if not active_fvgs.empty:
+            last_fvg = active_fvgs.iloc[-1]
+            top_z, bot_z = last_fvg['top'], last_fvg['bottom']
+            if (bot_z * 0.995) <= current_price <= (top_z * 1.005):
+                fvg_status = "🟢 FVG Demand (Alcista)" if last_fvg.get('fvg', 0) == 1 else "🔴 FVG Supply (Bajista)"
+
+    # 2. Liquidez BSL/SSL
+    liq_df = smc.liquidity(df)
+    liq_status = "En rango"
+    if not liq_df.empty and 'level' in liq_df.columns:
+        active_liq = liq_df.dropna(subset=['level'])
+        if not active_liq.empty:
+            level = active_liq.iloc[-1]['level']
+            diff_pct = abs(current_price - level) / current_price * 100
+            if diff_pct <= 1.0:
+                liq_status = "⚡ Cerca de BSL (Liquidez Superior)" if level > current_price else "⚡ Cerca de SSL (Liquidez Inferior)"
+
+    return {
+        "Activo": symbol,
+        "Precio Actual ($)": f"{current_price:,.2f}",
+        "Estado FVG / POI": fvg_status,
+        "Proximidad Liquidez": liq_status
+    }
+
+# --- EJECUCIÓN Y TABLA EN PANTALLA ---
+with st.spinner("Analizando mercado con Smart Money Concepts..."):
+    results = []
+    for sym in SYMBOL_LIST:
+        res = analyze_symbol(sym, TIMEFRAME)
+        if res:
+            results.append(res)
+
+if results:
+    results_df = pd.DataFrame(results)
+    st.dataframe(results_df, use_container_width=True)
+else:
+    st.error("No se pudieron obtener datos del exchange.")
